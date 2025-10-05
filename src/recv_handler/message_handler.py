@@ -560,6 +560,8 @@ class MessageHandler:
         image_count = 0
         if message_list is None:
             return None, 0
+        # 统一在最前加入【转发消息】标识（带层级缩进）
+        seg_list.append(Seg(type="text", data=("--" * layer) + "\n【转发消息】\n"))
         for sub_message in message_list:
             sub_message: dict
             sender_info: dict = sub_message.get("sender")
@@ -572,23 +574,17 @@ class MessageHandler:
                 continue
             message_of_sub_message = message_of_sub_message_list[0]
             if message_of_sub_message.get("type") == RealMessageType.forward:
-                if layer >= 3:
-                    full_seg_data = Seg(
-                        type="text",
-                        data=("--" * layer) + f"【{user_nickname}】:【转发消息】\n",
-                    )
-                else:
-                    sub_message_data = message_of_sub_message.get("data")
-                    if not sub_message_data:
-                        continue
-                    contents = sub_message_data.get("content")
-                    seg_data, count = await self._handle_forward_message(contents, layer + 1)
-                    image_count += count
-                    head_tip = Seg(
-                        type="text",
-                        data=("--" * layer) + f"【{user_nickname}】: 合并转发消息内容：\n",
-                    )
-                    full_seg_data = Seg(type="seglist", data=[head_tip, seg_data])
+                sub_message_data = message_of_sub_message.get("data")
+                if not sub_message_data:
+                    continue
+                contents = sub_message_data.get("content")
+                seg_data, count = await self._handle_forward_message(contents, layer + 1)
+                image_count += count
+                head_tip = Seg(
+                    type="text",
+                    data=("--" * layer) + f"【{user_nickname}】: 合并转发消息内容：\n",
+                )
+                full_seg_data = Seg(type="seglist", data=[head_tip, seg_data])
                 seg_list.append(full_seg_data)
             elif message_of_sub_message.get("type") == RealMessageType.text:
                 sub_message_data = message_of_sub_message.get("data")
@@ -634,6 +630,8 @@ class MessageHandler:
                     ]
                 full_seg_data = Seg(type="seglist", data=data_list)
                 seg_list.append(full_seg_data)
+        # 在结尾追加标识
+        seg_list.append(Seg(type="text", data=("--" * layer) + "【转发消息结束】"))
         return Seg(type="seglist", data=seg_list), image_count
 
     async def _get_forward_message(self, raw_message: dict) -> Dict[str, Any] | None:
