@@ -537,7 +537,7 @@ class MessageHandler:
                 return Seg(type="text", data=announce_text)
             
             # 检查是否为音乐卡片
-            if app == "com.tencent.music.lua" or app == "com.tencent.structmsg":
+            if app in ("com.tencent.music.lua", "com.tencent.structmsg"):
                 meta = parsed_json.get("meta", {})
                 music = meta.get("music", {})
                 

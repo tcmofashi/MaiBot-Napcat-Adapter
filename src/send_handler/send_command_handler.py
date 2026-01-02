@@ -1,44 +1,83 @@
 from maim_message import GroupInfo
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Callable, Optional
 
 from src import CommandType
 
 
+# 全局命令处理器注册表（在类外部定义以避免循环引用）
+_command_handlers: Dict[str, Dict[str, Any]] = {}
+
+
+def register_command(command_type: CommandType, require_group: bool = True):
+    """装饰器：注册命令处理器
+
+    Args:
+        command_type: 命令类型
+        require_group: 是否需要群聊信息，默认为True
+
+    Returns:
+        装饰器函数
+    """
+
+    def decorator(func: Callable) -> Callable:
+        _command_handlers[command_type.name] = {
+            "handler": func,
+            "require_group": require_group,
+        }
+        return func
+
+    return decorator
+
+
 class SendCommandHandleClass:
     @classmethod
-    def handle_command(cls, raw_command_data: Dict[str, Any], group_info: GroupInfo):
+    def handle_command(cls, raw_command_data: Dict[str, Any], group_info: Optional[GroupInfo]):
+        """统一命令处理入口
+
+        Args:
+            raw_command_data: 原始命令数据
+            group_info: 群聊信息（可选）
+
+        Returns:
+            Tuple[str, Dict[str, Any]]: (action, params) 用于发送给NapCat
+
+        Raises:
+            RuntimeError: 命令类型未知或处理失败
+        """
         command_name: str = raw_command_data.get("name")
+
+        if command_name not in _command_handlers:
+            raise RuntimeError(f"未知的命令类型: {command_name}")
+
         try:
-            match command_name:
-                case CommandType.GROUP_BAN.name:
-                    return cls.handle_ban_command(raw_command_data.get("args", {}), group_info)
-                case CommandType.GROUP_WHOLE_BAN.name:
-                    return cls.handle_whole_ban_command(raw_command_data.get("args", {}), group_info)
-                case CommandType.GROUP_KICK.name:
-                    return cls.handle_kick_command(raw_command_data.get("args", {}), group_info)
-                case CommandType.SEND_POKE.name:
-                    return cls.handle_poke_command(raw_command_data.get("args", {}), group_info)
-                case CommandType.DELETE_MSG.name:
-                    return cls.delete_msg_command(raw_command_data.get("args", {}))
-                case CommandType.AI_VOICE_SEND.name:
-                    return cls.handle_ai_voice_send_command(raw_command_data.get("args", {}), group_info)
-                case CommandType.MESSAGE_LIKE.name:
-                    return cls.handle_message_like_command(raw_command_data.get("args", {}))
-                case _:
-                    raise RuntimeError(f"未知的命令类型: {command_name}")
+            handler_info = _command_handlers[command_name]
+            handler = handler_info["handler"]
+            require_group = handler_info["require_group"]
+
+            # 检查群聊信息要求
+            if require_group and not group_info:
+                raise ValueError(f"命令 {command_name} 需要在群聊上下文中使用")
+
+            # 调用处理器
+            args = raw_command_data.get("args", {})
+            return handler(args, group_info)
+
         except Exception as e:
-            raise RuntimeError(f"处理命令时出错: {str(e)}") from e
+            raise RuntimeError(f"处理命令 {command_name} 时出错: {str(e)}") from e
+
+    # ============ 命令处理器（使用装饰器注册）============
 
     @staticmethod
-    def handle_ban_command(args: Dict[str, Any], group_info: GroupInfo) -> Tuple[str, Dict[str, Any]]:
+    @register_command(CommandType.GROUP_BAN, require_group=True)
+    def handle_ban_command(args: Dict[str, Any], group_info: Optional[GroupInfo]) -> Tuple[str, Dict[str, Any]]:
         """处理封禁命令
 
         Args:
-            args (Dict[str, Any]): 参数字典
-            group_info (GroupInfo): 群聊信息（对应目标群聊）
+            args: 参数字典 {"qq_id": int, "duration": int}
+            group_info: 群聊信息（对应目标群聊）
 
         Returns:
-            Tuple[CommandType, Dict[str, Any]]
+            Tuple[str, Dict[str, Any]]: (action, params)
         """
         duration: int = int(args["duration"])
         user_id: int = int(args["qq_id"])
@@ -59,15 +98,16 @@ class SendCommandHandleClass:
         )
 
     @staticmethod
-    def handle_whole_ban_command(args: Dict[str, Any], group_info: GroupInfo) -> Tuple[str, Dict[str, Any]]:
+    @register_command(CommandType.GROUP_WHOLE_BAN, require_group=True)
+    def handle_whole_ban_command(args: Dict[str, Any], group_info: Optional[GroupInfo]) -> Tuple[str, Dict[str, Any]]:
         """处理全体禁言命令
 
         Args:
-            args (Dict[str, Any]): 参数字典
-            group_info (GroupInfo): 群聊信息（对应目标群聊）
+            args: 参数字典 {"enable": bool}
+            group_info: 群聊信息（对应目标群聊）
 
         Returns:
-            Tuple[CommandType, Dict[str, Any]]
+            Tuple[str, Dict[str, Any]]: (action, params)
         """
         enable = args["enable"]
         assert isinstance(enable, bool), "enable参数必须是布尔值"
@@ -83,15 +123,16 @@ class SendCommandHandleClass:
         )
 
     @staticmethod
-    def handle_kick_command(args: Dict[str, Any], group_info: GroupInfo) -> Tuple[str, Dict[str, Any]]:
+    @register_command(CommandType.GROUP_KICK, require_group=True)
+    def handle_kick_command(args: Dict[str, Any], group_info: Optional[GroupInfo]) -> Tuple[str, Dict[str, Any]]:
         """处理群成员踢出命令
 
         Args:
-            args (Dict[str, Any]): 参数字典
-            group_info (GroupInfo): 群聊信息（对应目标群聊）
+            args: 参数字典 {"qq_id": int}
+            group_info: 群聊信息（对应目标群聊）
 
         Returns:
-            Tuple[CommandType, Dict[str, Any]]
+            Tuple[str, Dict[str, Any]]: (action, params)
         """
         user_id: int = int(args["qq_id"])
         group_id: int = int(group_info.group_id)
@@ -109,15 +150,16 @@ class SendCommandHandleClass:
         )
 
     @staticmethod
-    def handle_poke_command(args: Dict[str, Any], group_info: GroupInfo) -> Tuple[str, Dict[str, Any]]:
+    @register_command(CommandType.SEND_POKE, require_group=False)
+    def handle_poke_command(args: Dict[str, Any], group_info: Optional[GroupInfo]) -> Tuple[str, Dict[str, Any]]:
         """处理戳一戳命令
 
         Args:
-            args (Dict[str, Any]): 参数字典
-            group_info (GroupInfo): 群聊信息（对应目标群聊）
+            args: 参数字典 {"qq_id": int}
+            group_info: 群聊信息（可选，私聊时为None）
 
         Returns:
-            Tuple[CommandType, Dict[str, Any]]
+            Tuple[str, Dict[str, Any]]: (action, params)
         """
         user_id: int = int(args["qq_id"])
         if group_info is None:
@@ -137,14 +179,16 @@ class SendCommandHandleClass:
         )
 
     @staticmethod
-    def delete_msg_command(args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    @register_command(CommandType.DELETE_MSG, require_group=False)
+    def delete_msg_command(args: Dict[str, Any], group_info: Optional[GroupInfo]) -> Tuple[str, Dict[str, Any]]:
         """处理撤回消息命令
 
         Args:
-            args (Dict[str, Any]): 参数字典
+            args: 参数字典 {"message_id": int}
+            group_info: 群聊信息（不使用）
 
         Returns:
-            Tuple[CommandType, Dict[str, Any]]
+            Tuple[str, Dict[str, Any]]: (action, params)
         """
         try:
             message_id = int(args["message_id"])
@@ -163,10 +207,16 @@ class SendCommandHandleClass:
         )
 
     @staticmethod
-    def handle_ai_voice_send_command(args: Dict[str, Any], group_info: GroupInfo) -> Tuple[str, Dict[str, Any]]:
-        """
-        处理AI语音发送命令的逻辑。
-        并返回 NapCat 兼容的 (action, params) 元组。
+    @register_command(CommandType.AI_VOICE_SEND, require_group=True)
+    def handle_ai_voice_send_command(args: Dict[str, Any], group_info: Optional[GroupInfo]) -> Tuple[str, Dict[str, Any]]:
+        """处理AI语音发送命令
+
+        Args:
+            args: 参数字典 {"character": str, "text": str}
+            group_info: 群聊信息
+
+        Returns:
+            Tuple[str, Dict[str, Any]]: (action, params)
         """
         if not group_info or not group_info.group_id:
             raise ValueError("AI语音发送命令必须在群聊上下文中使用")
@@ -190,9 +240,16 @@ class SendCommandHandleClass:
         )
 
     @staticmethod
-    def handle_message_like_command(args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-        """
-        处理给消息贴表情的逻辑。
+    @register_command(CommandType.MESSAGE_LIKE, require_group=False)
+    def handle_message_like_command(args: Dict[str, Any], group_info: Optional[GroupInfo]) -> Tuple[str, Dict[str, Any]]:
+        """处理给消息贴表情命令
+
+        Args:
+            args: 参数字典 {"message_id": int, "emoji_id": int}
+            group_info: 群聊信息（不使用）
+
+        Returns:
+            Tuple[str, Dict[str, Any]]: (action, params)
         """
         if not args:
             raise ValueError("消息贴表情命令缺少参数")

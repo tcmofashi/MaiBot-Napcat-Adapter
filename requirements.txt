@@ -8,3 +8,4 @@ pillow
 tomlkit
 rich
 sqlmodel
+watchdog

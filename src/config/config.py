@@ -142,5 +142,15 @@ def load_config(config_path: str) -> Config:
 update_config()
 
 logger.info("正在品鉴配置文件...")
-global_config = load_config(config_path="config.toml")
+
+# 创建配置管理器
+from .config_manager import ConfigManager
+
+_config_manager = ConfigManager()
+_config_manager.load(config_path="config.toml")
+
+# 向后兼容：global_config 指向配置管理器
+# 所有现有代码可以继续使用 global_config.chat.xxx 访问配置
+global_config = _config_manager
+
 logger.info("非常的新鲜，非常的美味！")
