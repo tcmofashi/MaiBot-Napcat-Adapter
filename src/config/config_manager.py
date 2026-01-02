@@ -8,14 +8,6 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 
 from ..logger import logger
 from .config import Config, load_config
-from .official_configs import (
-    ChatConfig,
-    DebugConfig,
-    MaiBotServerConfig,
-    NapcatServerConfig,
-    NicknameConfig,
-    VoiceConfig,
-)
 
 
 class ConfigManager:
@@ -142,47 +134,41 @@ class ConfigManager:
             value = getattr(value, part)
         return value
 
-    @property
-    def nickname(self) -> NicknameConfig:
-        """昵称配置"""
+    def __getattr__(self, name: str) -> Any:
+        """动态代理配置属性访问
+        
+        支持直接访问配置对象的属性，如：
+        - config_manager.napcat_server
+        - config_manager.chat
+        - config_manager.debug
+        
+        Args:
+            name: 属性名
+            
+        Returns:
+            Any: 配置对象的对应属性值
+            
+        Raises:
+            RuntimeError: 配置尚未加载
+            AttributeError: 属性不存在
+        """
+        # 私有属性不代理
+        if name.startswith('_'):
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            )
+        
+        # 检查配置是否已加载
         if self._config is None:
             raise RuntimeError("配置尚未加载，请先调用 load() 方法")
-        return self._config.nickname
-
-    @property
-    def chat(self) -> ChatConfig:
-        """聊天配置"""
-        if self._config is None:
-            raise RuntimeError("配置尚未加载，请先调用 load() 方法")
-        return self._config.chat
-
-    @property
-    def voice(self) -> VoiceConfig:
-        """语音配置"""
-        if self._config is None:
-            raise RuntimeError("配置尚未加载，请先调用 load() 方法")
-        return self._config.voice
-
-    @property
-    def napcat_server(self) -> NapcatServerConfig:
-        """NapCat服务器配置"""
-        if self._config is None:
-            raise RuntimeError("配置尚未加载，请先调用 load() 方法")
-        return self._config.napcat_server
-
-    @property
-    def maibot_server(self) -> MaiBotServerConfig:
-        """MaiBot服务器配置"""
-        if self._config is None:
-            raise RuntimeError("配置尚未加载，请先调用 load() 方法")
-        return self._config.maibot_server
-
-    @property
-    def debug(self) -> DebugConfig:
-        """调试配置"""
-        if self._config is None:
-            raise RuntimeError("配置尚未加载，请先调用 load() 方法")
-        return self._config.debug
+        
+        # 尝试从 _config 获取属性
+        try:
+            return getattr(self._config, name)
+        except AttributeError as e:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            ) from e
 
     async def start_watch(self) -> None:
         """启动配置文件监控（需要在事件循环中调用）"""
