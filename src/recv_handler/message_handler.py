@@ -662,14 +662,17 @@ class MessageHandler:
         forward_header = Seg(type="text", data="========== 转发消息开始 ==========\n")
         forward_footer = Seg(type="text", data="========== 转发消息结束 ==========")
         
-        if image_count < 5 and image_count > 0:
-            # 处理图片数量小于5的情况，此时解析图片为base64
-            logger.trace("图片数量小于5，开始解析图片为base64")
+        # 图片阈值：超过此数量使用占位符避免麦麦VLM处理卡死
+        image_threshold = global_config.forward.image_threshold
+        
+        if image_count < image_threshold and image_count > 0:
+            # 处理图片数量小于阈值的情况，此时解析图片为base64
+            logger.trace(f"图片数量({image_count})小于{image_threshold}，开始解析图片为base64")
             parsed_message = await self._recursive_parse_image_seg(handled_message, True)
             return Seg(type="seglist", data=[forward_header, parsed_message, forward_footer])
         elif image_count > 0:
-            logger.trace("图片数量大于等于5，开始解析图片为占位符")
-            # 处理图片数量大于等于5的情况，此时解析图片为占位符
+            logger.trace(f"图片数量({image_count})大于等于{image_threshold}，开始解析图片为占位符")
+            # 处理图片数量大于等于阈值的情况，此时解析图片为占位符
             parsed_message = await self._recursive_parse_image_seg(handled_message, False)
             return Seg(type="seglist", data=[forward_header, parsed_message, forward_footer])
         else:

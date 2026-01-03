@@ -14,6 +14,7 @@ from src.config.config_base import ConfigBase
 from src.config.official_configs import (
     ChatConfig,
     DebugConfig,
+    ForwardConfig,
     MaiBotServerConfig,
     NapcatServerConfig,
     NicknameConfig,
@@ -117,6 +118,7 @@ class Config(ConfigBase):
     maibot_server: MaiBotServerConfig
     chat: ChatConfig
     voice: VoiceConfig
+    forward: ForwardConfig
     debug: DebugConfig
 
 

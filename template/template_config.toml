@@ -31,5 +31,8 @@ enable_poke = true # 是否启用戳一戳功能
 [voice] # 发送语音设置
 use_tts = false # 是否使用tts语音（请确保你配置了tts并有对应的adapter）
 
+[forward] # 转发消息处理设置
+image_threshold = 3 # 图片数量阈值：转发消息中图片数量超过此值时使用占位符(避免麦麦VLM处理卡死)
+
 [debug]
 level = "INFO" # 日志等级（DEBUG, INFO, WARNING, ERROR, CRITICAL）
