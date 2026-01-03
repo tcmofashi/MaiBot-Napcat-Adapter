@@ -142,21 +142,29 @@ class NoticeHandler:
                 handled_message, user_info = await self.handle_group_upload_notify(raw_message, group_id, user_id)
                 system_notice = True
             case NoticeType.group_increase:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
                 sub_type = raw_message.get("sub_type")
                 logger.info(f"处理群成员增加: {sub_type}")
                 handled_message, user_info = await self.handle_group_increase_notify(raw_message, group_id, user_id)
                 system_notice = True
             case NoticeType.group_decrease:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
                 sub_type = raw_message.get("sub_type")
                 logger.info(f"处理群成员减少: {sub_type}")
                 handled_message, user_info = await self.handle_group_decrease_notify(raw_message, group_id, user_id)
                 system_notice = True
             case NoticeType.group_admin:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
                 sub_type = raw_message.get("sub_type")
                 logger.info(f"处理群管理员变动: {sub_type}")
                 handled_message, user_info = await self.handle_group_admin_notify(raw_message, group_id, user_id)
                 system_notice = True
             case NoticeType.essence:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
                 sub_type = raw_message.get("sub_type")
                 logger.info(f"处理精华消息: {sub_type}")
                 handled_message, user_info = await self.handle_essence_notify(raw_message, group_id)
