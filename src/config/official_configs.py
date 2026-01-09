@@ -78,6 +78,14 @@ class VoiceConfig(ConfigBase):
 
 
 @dataclass
+class ForwardConfig(ConfigBase):
+    """转发消息相关配置"""
+    
+    image_threshold: int = 3
+    """图片数量阈值：转发消息中图片数量超过此值时，使用占位符代替base64发送，避免麦麦VLM处理卡死"""
+
+
+@dataclass
 class DebugConfig(ConfigBase):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     """日志级别，默认为INFO"""

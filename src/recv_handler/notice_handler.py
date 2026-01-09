@@ -10,6 +10,7 @@ from src.database import BanUser, db_manager, is_identical
 from . import NoticeType, ACCEPT_FORMAT
 from .message_sending import message_send_instance
 from .message_handler import message_handler
+from .qq_emoji_list import qq_face
 from maim_message import FormatInfo, UserInfo, GroupInfo, Seg, BaseMessageInfo, MessageBase
 
 from src.utils import (
@@ -87,12 +88,13 @@ class NoticeHandler:
         match notice_type:
             case NoticeType.friend_recall:
                 logger.info("好友撤回一条消息")
-                logger.info(f"撤回消息ID：{raw_message.get('message_id')}, 撤回时间：{raw_message.get('time')}")
-                logger.warning("暂时不支持撤回消息处理")
+                handled_message, user_info = await self.handle_friend_recall_notify(raw_message)
             case NoticeType.group_recall:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
                 logger.info("群内用户撤回一条消息")
-                logger.info(f"撤回消息ID：{raw_message.get('message_id')}, 撤回时间：{raw_message.get('time')}")
-                logger.warning("暂时不支持撤回消息处理")
+                handled_message, user_info = await self.handle_group_recall_notify(raw_message, group_id, user_id)
+                system_notice = True
             case NoticeType.notify:
                 sub_type = raw_message.get("sub_type")
                 match sub_type:
@@ -104,6 +106,12 @@ class NoticeHandler:
                             handled_message, user_info = await self.handle_poke_notify(raw_message, group_id, user_id)
                         else:
                             logger.warning("戳一戳消息被禁用，取消戳一戳处理")
+                    case NoticeType.Notify.group_name:
+                        if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                            return None
+                        logger.info("处理群名称变更")
+                        handled_message, user_info = await self.handle_group_name_notify(raw_message, group_id, user_id)
+                        system_notice = True
                     case _:
                         logger.warning(f"不支持的notify类型: {notice_type}.{sub_type}")
             case NoticeType.group_ban:
@@ -123,6 +131,45 @@ class NoticeHandler:
                         system_notice = True
                     case _:
                         logger.warning(f"不支持的group_ban类型: {notice_type}.{sub_type}")
+            case NoticeType.group_msg_emoji_like:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
+                logger.info("处理群消息表情回应")
+                handled_message, user_info = await self.handle_emoji_like_notify(raw_message, group_id, user_id)
+            case NoticeType.group_upload:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
+                logger.info("处理群文件上传")
+                handled_message, user_info = await self.handle_group_upload_notify(raw_message, group_id, user_id)
+                system_notice = True
+            case NoticeType.group_increase:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
+                sub_type = raw_message.get("sub_type")
+                logger.info(f"处理群成员增加: {sub_type}")
+                handled_message, user_info = await self.handle_group_increase_notify(raw_message, group_id, user_id)
+                system_notice = True
+            case NoticeType.group_decrease:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
+                sub_type = raw_message.get("sub_type")
+                logger.info(f"处理群成员减少: {sub_type}")
+                handled_message, user_info = await self.handle_group_decrease_notify(raw_message, group_id, user_id)
+                system_notice = True
+            case NoticeType.group_admin:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
+                sub_type = raw_message.get("sub_type")
+                logger.info(f"处理群管理员变动: {sub_type}")
+                handled_message, user_info = await self.handle_group_admin_notify(raw_message, group_id, user_id)
+                system_notice = True
+            case NoticeType.essence:
+                if not await message_handler.check_allow_to_chat(user_id, group_id, True, False):
+                    return None
+                sub_type = raw_message.get("sub_type")
+                logger.info(f"处理精华消息: {sub_type}")
+                handled_message, user_info = await self.handle_essence_notify(raw_message, group_id)
+                system_notice = True
             case _:
                 logger.warning(f"不支持的notice类型: {notice_type}")
                 return None
@@ -238,6 +285,150 @@ class NoticeHandler:
             type="text",
             data=f"{display_name}{first_txt}{target_name}{second_txt}（这是QQ的一个功能，用于提及某人，但没那么明显）",
         )
+        return seg_data, user_info
+
+    async def handle_friend_recall_notify(self, raw_message: dict) -> Tuple[Seg | None, UserInfo | None]:
+        """处理好友消息撤回"""
+        user_id = raw_message.get("user_id")
+        message_id = raw_message.get("message_id")
+        
+        if not user_id:
+            logger.error("用户ID不能为空，无法处理好友撤回通知")
+            return None, None
+        
+        # 获取好友信息
+        user_qq_info: dict = await get_stranger_info(self.server_connection, user_id)
+        if user_qq_info:
+            user_name = user_qq_info.get("nickname")
+        else:
+            user_name = "QQ用户"
+            logger.warning("无法获取撤回消息好友的昵称")
+        
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=user_id,
+            user_nickname=user_name,
+            user_cardname=None,
+        )
+        
+        seg_data = Seg(
+            type="notify",
+            data={
+                "sub_type": "friend_recall",
+                "message_id": message_id,
+            },
+        )
+        
+        return seg_data, user_info
+    
+    async def handle_group_recall_notify(
+        self, raw_message: dict, group_id: int, user_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """处理群消息撤回"""
+        if not group_id:
+            logger.error("群ID不能为空，无法处理群撤回通知")
+            return None, None
+        
+        message_id = raw_message.get("message_id")
+        operator_id = raw_message.get("operator_id")
+        
+        # 获取撤回操作者信息
+        operator_nickname: str = None
+        operator_cardname: str = None
+        
+        member_info: dict = await get_member_info(self.server_connection, group_id, operator_id)
+        if member_info:
+            operator_nickname = member_info.get("nickname")
+            operator_cardname = member_info.get("card")
+        else:
+            logger.warning("无法获取撤回操作者的昵称")
+            operator_nickname = "QQ用户"
+        
+        operator_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=operator_id,
+            user_nickname=operator_nickname,
+            user_cardname=operator_cardname,
+        )
+        
+        # 获取被撤回消息发送者信息（如果不是自己撤回的话）
+        recalled_user_info: UserInfo | None = None
+        if user_id != operator_id:
+            user_member_info: dict = await get_member_info(self.server_connection, group_id, user_id)
+            if user_member_info:
+                user_nickname = user_member_info.get("nickname")
+                user_cardname = user_member_info.get("card")
+            else:
+                user_nickname = "QQ用户"
+                user_cardname = None
+                logger.warning("无法获取被撤回消息发送者的昵称")
+            
+            recalled_user_info = UserInfo(
+                platform=global_config.maibot_server.platform_name,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                user_cardname=user_cardname,
+            )
+        
+        seg_data = Seg(
+            type="notify",
+            data={
+                "sub_type": "group_recall",
+                "message_id": message_id,
+                "recalled_user_info": recalled_user_info.to_dict() if recalled_user_info else None,
+            },
+        )
+        
+        return seg_data, operator_info
+
+    async def handle_emoji_like_notify(
+        self, raw_message: dict, group_id: int, user_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """处理群消息表情回应"""
+        if not group_id:
+            logger.error("群ID不能为空，无法处理表情回应通知")
+            return None, None
+
+        # 获取用户信息
+        user_qq_info: dict = await get_member_info(self.server_connection, group_id, user_id)
+        if user_qq_info:
+            user_name = user_qq_info.get("nickname")
+            user_cardname = user_qq_info.get("card")
+        else:
+            user_name = "QQ用户"
+            user_cardname = "QQ用户"
+            logger.warning("无法获取表情回应用户的昵称")
+
+        # 解析表情列表
+        likes = raw_message.get("likes", [])
+        message_id = raw_message.get("message_id")
+
+        # 构建表情文本，直接使用 qq_face 映射
+        emoji_texts = []
+        for like in likes:
+            emoji_id = str(like.get("emoji_id", ""))
+            count = like.get("count", 1)
+            # 使用 qq_face 字典获取表情描述
+            emoji = qq_face.get(emoji_id, f"[表情：未知{emoji_id}]")
+            if count > 1:
+                emoji_texts.append(f"{emoji}x{count}")
+            else:
+                emoji_texts.append(emoji)
+
+        emoji_str = "、".join(emoji_texts) if emoji_texts else "未知表情"
+        display_name = user_cardname if user_cardname and user_cardname != "QQ用户" else user_name
+
+        # 构建消息文本
+        message_text = f"{display_name} 对消息(ID:{message_id})表达了 {emoji_str}"
+
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=user_id,
+            user_nickname=user_name,
+            user_cardname=user_cardname,
+        )
+
+        seg_data = Seg(type="text", data=message_text)
         return seg_data, user_info
 
     async def handle_ban_notify(self, raw_message: dict, group_id: int) -> Tuple[Seg, UserInfo] | Tuple[None, None]:
@@ -511,6 +702,299 @@ class NoticeHandler:
                 logger.error(f"发送通知消息失败: {str(e)}")
                 await unsuccessful_notice_queue.put(to_be_send)
             await asyncio.sleep(1)
+
+    async def handle_group_upload_notify(
+        self, raw_message: dict, group_id: int, user_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """
+        处理群文件上传通知
+        """
+        file_info: dict = raw_message.get("file", {})
+        file_name = file_info.get("name", "未知文件")
+        file_size = file_info.get("size", 0)
+        file_id = file_info.get("id", "")
+
+        user_qq_info: dict = await get_member_info(self.server_connection, group_id, user_id)
+        if user_qq_info:
+            user_name = user_qq_info.get("nickname")
+            user_cardname = user_qq_info.get("card")
+        else:
+            logger.warning("无法获取上传者信息")
+            user_name = "QQ用户"
+            user_cardname = None
+
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=user_id,
+            user_nickname=user_name,
+            user_cardname=user_cardname,
+        )
+
+        # 格式化文件大小
+        if file_size < 1024:
+            size_str = f"{file_size}B"
+        elif file_size < 1024 * 1024:
+            size_str = f"{file_size / 1024:.2f}KB"
+        else:
+            size_str = f"{file_size / (1024 * 1024):.2f}MB"
+
+        notify_seg = Seg(
+            type="notify",
+            data={
+                "sub_type": "group_upload",
+                "file_name": file_name,
+                "file_size": size_str,
+                "file_id": file_id,
+            },
+        )
+
+        return notify_seg, user_info
+
+    async def handle_group_increase_notify(
+        self, raw_message: dict, group_id: int, user_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """
+        处理群成员增加通知
+        """
+        sub_type = raw_message.get("sub_type")
+        operator_id = raw_message.get("operator_id")
+
+        # 获取新成员信息
+        user_qq_info: dict = await get_member_info(self.server_connection, group_id, user_id)
+        if user_qq_info:
+            user_name = user_qq_info.get("nickname")
+            user_cardname = user_qq_info.get("card")
+        else:
+            logger.warning("无法获取新成员信息")
+            user_name = "QQ用户"
+            user_cardname = None
+
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=user_id,
+            user_nickname=user_name,
+            user_cardname=user_cardname,
+        )
+
+        # 获取操作者信息
+        operator_name = "未知"
+        if operator_id:
+            operator_info: dict = await get_member_info(self.server_connection, group_id, operator_id)
+            if operator_info:
+                operator_name = operator_info.get("card") or operator_info.get("nickname", "未知")
+
+        if sub_type == NoticeType.GroupIncrease.invite:
+            action_text = f"被 {operator_name} 邀请"
+        elif sub_type == NoticeType.GroupIncrease.approve:
+            action_text = f"经 {operator_name} 同意"
+        else:
+            action_text = "加入"
+
+        notify_seg = Seg(
+            type="notify",
+            data={
+                "sub_type": "group_increase",
+                "action": action_text,
+                "increase_type": sub_type,
+                "operator_id": operator_id,
+            },
+        )
+
+        return notify_seg, user_info
+
+    async def handle_group_decrease_notify(
+        self, raw_message: dict, group_id: int, user_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """
+        处理群成员减少通知
+        """
+        sub_type = raw_message.get("sub_type")
+        operator_id = raw_message.get("operator_id")
+
+        # 获取离开成员信息
+        user_qq_info: dict = await get_member_info(self.server_connection, group_id, user_id)
+        if user_qq_info:
+            user_name = user_qq_info.get("nickname")
+            user_cardname = user_qq_info.get("card")
+        else:
+            logger.warning("无法获取离开成员信息")
+            user_name = "QQ用户"
+            user_cardname = None
+
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=user_id,
+            user_nickname=user_name,
+            user_cardname=user_cardname,
+        )
+
+        # 获取操作者信息
+        operator_name = "未知"
+        if operator_id and operator_id != 0:
+            operator_info: dict = await get_member_info(self.server_connection, group_id, operator_id)
+            if operator_info:
+                operator_name = operator_info.get("card") or operator_info.get("nickname", "未知")
+
+        if sub_type == NoticeType.GroupDecrease.leave:
+            action_text = "主动退群"
+        elif sub_type == NoticeType.GroupDecrease.kick:
+            action_text = f"被 {operator_name} 踢出"
+        elif sub_type == NoticeType.GroupDecrease.kick_me:
+            action_text = "机器人被踢出"
+        else:
+            action_text = "离开群聊"
+
+        notify_seg = Seg(
+            type="notify",
+            data={
+                "sub_type": "group_decrease",
+                "action": action_text,
+                "decrease_type": sub_type,
+                "operator_id": operator_id,
+            },
+        )
+
+        return notify_seg, user_info
+
+    async def handle_group_admin_notify(
+        self, raw_message: dict, group_id: int, user_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """
+        处理群管理员变动通知
+        """
+        sub_type = raw_message.get("sub_type")
+
+        # 获取目标用户信息
+        user_qq_info: dict = await get_member_info(self.server_connection, group_id, user_id)
+        if user_qq_info:
+            user_name = user_qq_info.get("nickname")
+            user_cardname = user_qq_info.get("card")
+        else:
+            logger.warning("无法获取目标用户信息")
+            user_name = "QQ用户"
+            user_cardname = None
+
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=user_id,
+            user_nickname=user_name,
+            user_cardname=user_cardname,
+        )
+
+        if sub_type == NoticeType.GroupAdmin.set:
+            action_text = "被设置为管理员"
+        elif sub_type == NoticeType.GroupAdmin.unset:
+            action_text = "被取消管理员"
+        else:
+            action_text = "管理员变动"
+
+        notify_seg = Seg(
+            type="notify",
+            data={
+                "sub_type": "group_admin",
+                "action": action_text,
+                "admin_type": sub_type,
+            },
+        )
+
+        return notify_seg, user_info
+
+    async def handle_essence_notify(
+        self, raw_message: dict, group_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """
+        处理精华消息通知
+        """
+        sub_type = raw_message.get("sub_type")
+        sender_id = raw_message.get("sender_id")
+        operator_id = raw_message.get("operator_id")
+        message_id = raw_message.get("message_id")
+
+        # 获取操作者信息(设置精华的人)
+        operator_info: dict = await get_member_info(self.server_connection, group_id, operator_id)
+        if operator_info:
+            operator_name = operator_info.get("nickname")
+            operator_cardname = operator_info.get("card")
+        else:
+            logger.warning("无法获取操作者信息")
+            operator_name = "QQ用户"
+            operator_cardname = None
+
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=operator_id,
+            user_nickname=operator_name,
+            user_cardname=operator_cardname,
+        )
+
+        # 获取消息发送者信息
+        sender_name = "未知用户"
+        if sender_id:
+            sender_info: dict = await get_member_info(self.server_connection, group_id, sender_id)
+            if sender_info:
+                sender_name = sender_info.get("card") or sender_info.get("nickname", "未知用户")
+
+        if sub_type == NoticeType.Essence.add:
+            action_text = f"将 {sender_name} 的消息设为精华"
+        elif sub_type == NoticeType.Essence.delete:
+            action_text = f"移除了 {sender_name} 的精华消息"
+        else:
+            action_text = "精华消息变动"
+
+        notify_seg = Seg(
+            type="notify",
+            data={
+                "sub_type": "essence",
+                "action": action_text,
+                "essence_type": sub_type,
+                "sender_id": sender_id,
+                "message_id": message_id,
+            },
+        )
+
+        return notify_seg, user_info
+
+    async def handle_group_name_notify(
+        self, raw_message: dict, group_id: int, user_id: int
+    ) -> Tuple[Seg | None, UserInfo | None]:
+        """
+        处理群名称变更通知
+        """
+        new_name = raw_message.get("name_new")
+
+        if not new_name:
+            logger.warning("群名称变更通知缺少新名称")
+            return None, None
+
+        # 获取操作者信息
+        user_info_dict: dict = await get_member_info(self.server_connection, group_id, user_id)
+        if user_info_dict:
+            user_name = user_info_dict.get("nickname")
+            user_cardname = user_info_dict.get("card")
+        else:
+            logger.warning("无法获取修改群名称的用户信息")
+            user_name = "QQ用户"
+            user_cardname = None
+
+        user_info = UserInfo(
+            platform=global_config.maibot_server.platform_name,
+            user_id=user_id,
+            user_nickname=user_name,
+            user_cardname=user_cardname,
+        )
+
+        action_text = f"修改群名称为: {new_name}"
+
+        notify_seg = Seg(
+            type="notify",
+            data={
+                "sub_type": "group_name",
+                "action": action_text,
+                "new_name": new_name,
+            },
+        )
+
+        return notify_seg, user_info
 
 
 notice_handler = NoticeHandler()

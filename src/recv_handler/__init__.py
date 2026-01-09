@@ -32,13 +32,37 @@ class NoticeType:  # 通知事件
     group_recall = "group_recall"  # 群聊消息撤回
     notify = "notify"
     group_ban = "group_ban"  # 群禁言
+    group_msg_emoji_like = "group_msg_emoji_like"  # 群消息表情回应
+    group_upload = "group_upload"  # 群文件上传
+    group_increase = "group_increase"  # 群成员增加
+    group_decrease = "group_decrease"  # 群成员减少
+    group_admin = "group_admin"  # 群管理员变动
+    essence = "essence"  # 精华消息
 
     class Notify:
         poke = "poke"  # 戳一戳
+        group_name = "group_name"  # 群名称变更
 
     class GroupBan:
         ban = "ban"  # 禁言
         lift_ban = "lift_ban"  # 解除禁言
+
+    class GroupIncrease:
+        approve = "approve"  # 管理员同意入群
+        invite = "invite"  # 被邀请入群
+
+    class GroupDecrease:
+        leave = "leave"  # 主动退群
+        kick = "kick"  # 被踢出群
+        kick_me = "kick_me"  # 机器人被踢
+
+    class GroupAdmin:
+        set = "set"  # 设置管理员
+        unset = "unset"  # 取消管理员
+
+    class Essence:
+        add = "add"  # 添加精华消息
+        delete = "delete"  # 移除精华消息
 
 
 class RealMessageType:  # 实际消息分类
@@ -56,6 +80,8 @@ class RealMessageType:  # 实际消息分类
     reply = "reply"  # 回复消息
     forward = "forward"  # 转发消息
     node = "node"  # 转发消息节点
+    json = "json"  # JSON卡片消息
+    file = "file"  # 文件消息
 
 
 class MessageSentType:

@@ -8,6 +8,7 @@ from src.utils import (
     get_self_info,
     get_message_detail,
 )
+import base64
 from .qq_emoji_list import qq_face
 from .message_sending import message_send_instance
 from . import RealMessageType, MessageType, ACCEPT_FORMAT
@@ -300,7 +301,23 @@ class MessageHandler:
                     else:
                         logger.warning("record处理失败或不支持")
                 case RealMessageType.video:
-                    logger.warning("不支持视频解析")
+                    ret_seg = await self.handle_video_message(sub_message)
+                    if ret_seg:
+                        seg_message.append(ret_seg)
+                    else:
+                        logger.warning("video处理失败")
+                case RealMessageType.json:
+                    ret_segs = await self.handle_json_message(sub_message)
+                    if ret_segs:
+                        seg_message.extend(ret_segs)
+                    else:
+                        logger.warning("json处理失败")
+                case RealMessageType.file:
+                    ret_seg = await self.handle_file_message(sub_message)
+                    if ret_seg:
+                        seg_message.append(ret_seg)
+                    else:
+                        logger.warning("file处理失败")
                 case RealMessageType.at:
                     ret_seg = await self.handle_at_message(
                         sub_message,
@@ -445,6 +462,308 @@ class MessageHandler:
             return None
         return Seg(type="voice", data=audio_base64)
 
+    async def handle_video_message(self, raw_message: dict) -> Seg | None:
+        """
+        处理视频消息
+        Parameters:
+            raw_message: dict: 原始消息
+        Returns:
+            seg_data: Seg: 处理后的消息段（video_card类型）
+        """
+        message_data: dict = raw_message.get("data")
+        file: str = message_data.get("file", "")
+        url: str = message_data.get("url", "")
+        file_size: str = message_data.get("file_size", "")
+        
+        if not file:
+            logger.warning("视频消息缺少文件信息")
+            return None
+        
+        # 返回结构化的视频卡片数据
+        return Seg(type="video_card", data={
+            "file": file,
+            "file_size": file_size,
+            "url": url
+        })
+
+    async def handle_json_message(self, raw_message: dict) -> List[Seg] | None:
+        """
+        处理JSON卡片消息(小程序、分享、群公告等)
+        Parameters:
+            raw_message: dict: 原始消息
+        Returns:
+            seg_data: List[Seg]: 处理后的消息段列表（可能包含文本和图片）
+        """
+        message_data: dict = raw_message.get("data")
+        json_data: str = message_data.get("data")
+        
+        if not json_data:
+            logger.warning("JSON消息缺少数据")
+            return None
+        
+        try:
+            # 尝试解析JSON获取详细信息
+            parsed_json = json.loads(json_data)
+            app = parsed_json.get("app", "")
+            meta = parsed_json.get("meta", {})
+            
+            # 群公告（由于图片URL是加密的，因此无法读取）
+            if app == "com.tencent.mannounce":
+                mannounce = meta.get("mannounce", {})
+                title = mannounce.get("title", "")
+                text = mannounce.get("text", "")
+                encode_flag = mannounce.get("encode", 0)
+                if encode_flag == 1:
+                    try:
+                        if title:
+                            title = base64.b64decode(title).decode("utf-8", errors="ignore")
+                        if text:
+                            text = base64.b64decode(text).decode("utf-8", errors="ignore")
+                    except Exception as e:
+                        logger.warning(f"群公告Base64解码失败: {e}")
+                if title and text:
+                    content = f"[{title}]:{text}"
+                elif title:
+                    content = f"[{title}]"
+                elif text:
+                    content = f"{text}"
+                else:
+                    content = "[群公告]"
+                return [Seg(type="text", data=content)]
+            
+            # 音乐卡片
+            if app in ("com.tencent.music.lua", "com.tencent.structmsg"):
+                music = meta.get("music", {})
+                if music:
+                    title = music.get("title", "")
+                    singer = music.get("desc", "") or music.get("singer", "")
+                    jump_url = music.get("jumpUrl", "") or music.get("jump_url", "")
+                    music_url = music.get("musicUrl", "") or music.get("music_url", "")
+                    tag = music.get("tag", "")
+                    preview = music.get("preview", "")
+                    
+                    return [Seg(type="music_card", data={
+                        "title": title,
+                        "singer": singer,
+                        "jump_url": jump_url,
+                        "music_url": music_url,
+                        "tag": tag,
+                        "preview": preview
+                    })]
+            
+            # QQ小程序分享（含预览图）
+            if app == "com.tencent.miniapp_01":
+                detail = meta.get("detail_1", {})
+                if detail:
+                    title = detail.get("title", "")
+                    desc = detail.get("desc", "")
+                    url = detail.get("url", "")
+                    qqdocurl = detail.get("qqdocurl", "")
+                    preview_url = detail.get("preview", "")
+                    icon = detail.get("icon", "")
+                    
+                    seg_list = [Seg(type="miniapp_card", data={
+                        "title": title,
+                        "desc": desc,
+                        "url": url,
+                        "source_url": qqdocurl,
+                        "preview": preview_url,
+                        "icon": icon
+                    })]
+                    
+                    # 下载预览图
+                    if preview_url:
+                        try:
+                            image_base64 = await get_image_base64(preview_url)
+                            seg_list.append(Seg(type="image", data=image_base64))
+                        except Exception as e:
+                            logger.error(f"QQ小程序预览图下载失败: {e}")
+                    
+                    return seg_list
+            
+            # 礼物消息
+            if app == "com.tencent.giftmall.giftark":
+                giftark = meta.get("giftark", {})
+                if giftark:
+                    gift_name = giftark.get("title", "礼物")
+                    desc = giftark.get("desc", "")
+                    gift_text = f"[赠送礼物: {gift_name}]"
+                    if desc:
+                        gift_text += f"\n{desc}"
+                    return [Seg(type="text", data=gift_text)]
+            
+            # 推荐联系人
+            if app == "com.tencent.contact.lua":
+                contact_info = meta.get("contact", {})
+                name = contact_info.get("nickname", "未知联系人")
+                tag = contact_info.get("tag", "推荐联系人")
+                return [Seg(type="text", data=f"[{tag}] {name}")]
+            
+            # 推荐群聊
+            if app == "com.tencent.troopsharecard":
+                contact_info = meta.get("contact", {})
+                name = contact_info.get("nickname", "未知群聊")
+                tag = contact_info.get("tag", "推荐群聊")
+                return [Seg(type="text", data=f"[{tag}] {name}")]
+            
+            # 图文分享（如 哔哩哔哩HD、网页、群精华等）
+            if app == "com.tencent.tuwen.lua":
+                news = meta.get("news", {})
+                title = news.get("title", "未知标题")
+                desc = (news.get("desc", "") or "").replace("[图片]", "").strip()
+                tag = news.get("tag", "图文分享")
+                preview_url = news.get("preview", "")
+                if tag and title and tag in title:
+                    title = title.replace(tag, "", 1).strip("：: -— ")
+                text_content = f"[{tag}] {title}:{desc}"
+                seg_list = [Seg(type="text", data=text_content)]
+                
+                # 下载预览图
+                if preview_url:
+                    try:
+                        image_base64 = await get_image_base64(preview_url)
+                        seg_list.append(Seg(type="image", data=image_base64))
+                    except Exception as e:
+                        logger.error(f"图文预览图下载失败: {e}")
+                
+                return seg_list
+            
+            # 群相册（含预览图）
+            if app == "com.tencent.feed.lua":
+                feed = meta.get("feed", {})
+                title = feed.get("title", "群相册")
+                tag = feed.get("tagName", "群相册")
+                desc = feed.get("forwardMessage", "")
+                cover_url = feed.get("cover", "")
+                if tag and title and tag in title:
+                    title = title.replace(tag, "", 1).strip("：: -— ")
+                text_content = f"[{tag}] {title}:{desc}"
+                seg_list = [Seg(type="text", data=text_content)]
+                
+                # 下载封面图
+                if cover_url:
+                    try:
+                        image_base64 = await get_image_base64(cover_url)
+                        seg_list.append(Seg(type="image", data=image_base64))
+                    except Exception as e:
+                        logger.error(f"群相册封面下载失败: {e}")
+                
+                return seg_list
+            
+            # QQ收藏分享（含预览图）
+            if app == "com.tencent.template.qqfavorite.share":
+                news = meta.get("news", {})
+                desc = news.get("desc", "").replace("[图片]", "").strip()
+                tag = news.get("tag", "QQ收藏")
+                preview_url = news.get("preview", "")
+                seg_list = [Seg(type="text", data=f"[{tag}] {desc}")]
+                
+                # 下载预览图
+                if preview_url:
+                    try:
+                        image_base64 = await get_image_base64(preview_url)
+                        seg_list.append(Seg(type="image", data=image_base64))
+                    except Exception as e:
+                        logger.error(f"QQ收藏预览图下载失败: {e}")
+                
+                return seg_list
+            
+            # QQ空间分享（含预览图）
+            if app == "com.tencent.miniapp.lua":
+                miniapp = meta.get("miniapp", {})
+                title = miniapp.get("title", "未知标题")
+                tag = miniapp.get("tag", "QQ空间")
+                preview_url = miniapp.get("preview", "")
+                seg_list = [Seg(type="text", data=f"[{tag}] {title}")]
+                
+                # 下载预览图
+                if preview_url:
+                    try:
+                        image_base64 = await get_image_base64(preview_url)
+                        seg_list.append(Seg(type="image", data=image_base64))
+                    except Exception as e:
+                        logger.error(f"QQ空间预览图下载失败: {e}")
+                
+                return seg_list
+            
+            # QQ频道分享（含预览图）
+            if app == "com.tencent.forum":
+                detail = meta.get("detail") if isinstance(meta, dict) else None
+                if detail:
+                    feed = detail.get("feed", {})
+                    poster = detail.get("poster", {})
+                    channel_info = detail.get("channel_info", {})
+                    guild_name = channel_info.get("guild_name", "")
+                    nick = poster.get("nick", "QQ用户")
+                    title = feed.get("title", {}).get("contents", [{}])[0].get("text_content", {}).get("text", "帖子")
+                    face_content = ""
+                    for item in feed.get("contents", {}).get("contents", []):
+                        emoji = item.get("emoji_content")
+                        if emoji:
+                            eid = emoji.get("id")
+                            if eid in qq_face:
+                                face_content += qq_face.get(eid, "")
+                    
+                    seg_list = [Seg(type="text", data=f"[频道帖子] [{guild_name}]{nick}:{title}{face_content}")]
+                    
+                    # 下载帖子中的图片
+                    pic_urls = [img.get("pic_url") for img in feed.get("images", []) if img.get("pic_url")]
+                    for pic_url in pic_urls:
+                        try:
+                            image_base64 = await get_image_base64(pic_url)
+                            seg_list.append(Seg(type="image", data=image_base64))
+                        except Exception as e:
+                            logger.error(f"QQ频道图片下载失败: {e}")
+                    
+                    return seg_list
+            
+            # QQ地图位置分享
+            if app == "com.tencent.map":
+                location = meta.get("Location.Search", {})
+                name = location.get("name", "未知地点")
+                address = location.get("address", "")
+                return [Seg(type="text", data=f"[位置] {address} · {name}")]
+            
+            # QQ一起听歌
+            if app == "com.tencent.together":
+                invite = (meta or {}).get("invite", {})
+                title = invite.get("title") or "一起听歌"
+                summary = invite.get("summary") or ""
+                return [Seg(type="text", data=f"[{title}] {summary}")]
+            
+            # 其他卡片消息使用prompt字段
+            prompt = parsed_json.get("prompt", "[卡片消息]")
+            return [Seg(type="text", data=prompt)]
+        except json.JSONDecodeError:
+            logger.warning("JSON消息解析失败")
+            return [Seg(type="text", data="[卡片消息]")]
+        except Exception as e:
+            logger.error(f"JSON消息处理异常: {e}")
+            return [Seg(type="text", data="[卡片消息]")]
+
+    async def handle_file_message(self, raw_message: dict) -> Seg | None:
+        """
+        处理文件消息
+        Parameters:
+            raw_message: dict: 原始消息
+        Returns:
+            seg_data: Seg: 处理后的消息段
+        """
+        message_data: dict = raw_message.get("data")
+        file_name: str = message_data.get("file")
+        file_size: str = message_data.get("file_size", "未知大小")
+        file_url: str = message_data.get("url")
+        
+        if not file_name:
+            logger.warning("文件消息缺少文件名")
+            return None
+        
+        file_text = f"[文件: {file_name}, 大小: {file_size}字节]"
+        if file_url:
+            file_text += f"\n文件链接: {file_url}"
+        
+        return Seg(type="text", data=file_text)
+
     async def handle_reply_message(self, raw_message: dict, additional_config: dict) -> Tuple[List[Seg] | None, dict]:
         # sourcery skip: move-assign-in-block, use-named-expression
         """
@@ -464,7 +783,7 @@ class MessageHandler:
             return None, {}
         reply_message, _ = await self.handle_real_message(message_detail, in_reply=True)
         if reply_message is None:
-            reply_message = "(获取发言内容失败)"
+            reply_message = [Seg(type="text", data="(获取发言内容失败)")]
         sender_info: dict = message_detail.get("sender")
         sender_nickname: str = sender_info.get("nickname")
         sender_id: str = sender_info.get("user_id")
@@ -489,18 +808,28 @@ class MessageHandler:
         image_count: int
         if not handled_message:
             return None
-        if image_count < 5 and image_count > 0:
-            # 处理图片数量小于5的情况，此时解析图片为base64
-            logger.trace("图片数量小于5，开始解析图片为base64")
-            return await self._recursive_parse_image_seg(handled_message, True)
+        
+        # 添加转发消息的标题和结束标识
+        forward_header = Seg(type="text", data="========== 转发消息开始 ==========\n")
+        forward_footer = Seg(type="text", data="========== 转发消息结束 ==========")
+        
+        # 图片阈值：超过此数量使用占位符避免麦麦VLM处理卡死
+        image_threshold = global_config.forward.image_threshold
+        
+        if image_count < image_threshold and image_count > 0:
+            # 处理图片数量小于阈值的情况，此时解析图片为base64
+            logger.trace(f"图片数量({image_count})小于{image_threshold}，开始解析图片为base64")
+            parsed_message = await self._recursive_parse_image_seg(handled_message, True)
+            return Seg(type="seglist", data=[forward_header, parsed_message, forward_footer])
         elif image_count > 0:
-            logger.trace("图片数量大于等于5，开始解析图片为占位符")
-            # 处理图片数量大于等于5的情况，此时解析图片为占位符
-            return await self._recursive_parse_image_seg(handled_message, False)
+            logger.trace(f"图片数量({image_count})大于等于{image_threshold}，开始解析图片为占位符")
+            # 处理图片数量大于等于阈值的情况，此时解析图片为占位符
+            parsed_message = await self._recursive_parse_image_seg(handled_message, False)
+            return Seg(type="seglist", data=[forward_header, parsed_message, forward_footer])
         else:
             # 处理没有图片的情况，此时直接返回
             logger.trace("没有图片，直接返回")
-            return handled_message
+            return Seg(type="seglist", data=[forward_header, handled_message, forward_footer])
 
     async def _recursive_parse_image_seg(self, seg_data: Seg, to_image: bool) -> Seg:
         # sourcery skip: merge-else-if-into-elif
@@ -560,6 +889,8 @@ class MessageHandler:
         image_count = 0
         if message_list is None:
             return None, 0
+        # 统一在最前加入【转发消息】标识（带层级缩进）
+        seg_list.append(Seg(type="text", data=("--" * layer) + "\n【转发消息】\n"))
         for sub_message in message_list:
             sub_message: dict
             sender_info: dict = sub_message.get("sender")
@@ -572,23 +903,17 @@ class MessageHandler:
                 continue
             message_of_sub_message = message_of_sub_message_list[0]
             if message_of_sub_message.get("type") == RealMessageType.forward:
-                if layer >= 3:
-                    full_seg_data = Seg(
-                        type="text",
-                        data=("--" * layer) + f"【{user_nickname}】:【转发消息】\n",
-                    )
-                else:
-                    sub_message_data = message_of_sub_message.get("data")
-                    if not sub_message_data:
-                        continue
-                    contents = sub_message_data.get("content")
-                    seg_data, count = await self._handle_forward_message(contents, layer + 1)
-                    image_count += count
-                    head_tip = Seg(
-                        type="text",
-                        data=("--" * layer) + f"【{user_nickname}】: 合并转发消息内容：\n",
-                    )
-                    full_seg_data = Seg(type="seglist", data=[head_tip, seg_data])
+                sub_message_data = message_of_sub_message.get("data")
+                if not sub_message_data:
+                    continue
+                contents = sub_message_data.get("content")
+                seg_data, count = await self._handle_forward_message(contents, layer + 1)
+                image_count += count
+                head_tip = Seg(
+                    type="text",
+                    data=("--" * layer) + f"【{user_nickname}】: 合并转发消息内容：\n",
+                )
+                full_seg_data = Seg(type="seglist", data=[head_tip, seg_data])
                 seg_list.append(full_seg_data)
             elif message_of_sub_message.get("type") == RealMessageType.text:
                 sub_message_data = message_of_sub_message.get("data")
@@ -634,6 +959,8 @@ class MessageHandler:
                     ]
                 full_seg_data = Seg(type="seglist", data=data_list)
                 seg_list.append(full_seg_data)
+        # 在结尾追加标识
+        seg_list.append(Seg(type="text", data=("--" * layer) + "【转发消息结束】"))
         return Seg(type="seglist", data=seg_list), image_count
 
     async def _get_forward_message(self, raw_message: dict) -> Dict[str, Any] | None:
