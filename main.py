@@ -10,7 +10,7 @@ from src.recv_handler.notice_handler import notice_handler
 from src.recv_handler.message_sending import message_send_instance
 from src.send_handler.nc_sending import nc_message_sender
 from src.config import global_config
-from src.mmc_com_layer import mmc_start_com, mmc_stop_com, router
+from src.mmc_com_layer import mmc_start_com, mmc_stop_com
 from src.response_pool import put_response, check_timeout_response
 
 message_queue = asyncio.Queue()
@@ -47,7 +47,6 @@ async def message_process():
 
 
 async def main():
-    message_send_instance.maibot_router = router
     _ = await asyncio.gather(napcat_server(), mmc_start_com(), message_process(), check_timeout_response())
 
 def check_napcat_server_token(conn, request):
