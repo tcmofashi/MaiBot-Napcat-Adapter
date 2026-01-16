@@ -107,10 +107,10 @@ async def _legacy_message_handler_adapter(message: APIMessageBase, metadata: dic
 async def mmc_start_com():
     global router
     config = global_config.maibot_server
-    
+
     if config.enable_api_server and HAS_MESSAGE_CONVERTER:
         logger.info("使用 API-Server 模式连接 MaiBot")
-        
+
         # Create legacy adapter handler
         # We need to define the on_message callback here to bridge to send_handler
         async def on_message_bridge(message: APIMessageBase, metadata: Dict[str, Any]):
@@ -119,12 +119,12 @@ async def mmc_start_com():
             # receiver_info 包含消息接收者信息，需要提取到 group_info/user_info
             try:
                 from maim_message import MessageConverter
-                
+
                 legacy_message = MessageConverter.from_api_send(message)
                 msg_dict = legacy_message.to_dict()
-                
+
                 await send_handler.handle_message(msg_dict)
-                
+
             except Exception as e:
                 logger.error(f"消息桥接转换失败: {e}")
                 import traceback
@@ -134,14 +134,15 @@ async def mmc_start_com():
             url=config.base_url,
             api_key=config.api_key,
             platform=config.platform_name,
-            on_message=on_message_bridge
+            on_message=on_message_bridge,
+            custom_logger=custom_logger  # 传入自定义logger
         )
-        
+
         client = WebSocketClient(client_config)
         router = APIServerWrapper(client)
         message_send_instance.maibot_router = router
         await router.run()
-        
+
     else:
         logger.info("使用 Legacy WebSocket 模式连接 MaiBot")
         route_config = RouteConfig(
